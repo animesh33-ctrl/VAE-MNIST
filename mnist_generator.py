@@ -6,6 +6,7 @@ from torchvision import datasets, transforms
 from torchvision.utils import save_image
 from tqdm import tqdm
 import os
+import matplotlib.pyplot as plt
 
 # ─── CONFIG ─────────────────────────────────────────────────────
 DEVICE       = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -157,15 +158,37 @@ def run_epoch(model, loader, optimizer, kl_weight, train=True):
     return total_loss / n, total_acc / n
 
 
-# ─── GENERATE ───────────────────────────────────────────────────
-def generate_digit(model, digit):
+
+
+# # ─── GENERATE ───────────────────────────────────────────────────
+def generate_digit(model, digit, size=225):
     model.eval()
     with torch.no_grad():
         z     = torch.randn(1, LATENT_DIM).to(DEVICE)
         label = F.one_hot(torch.tensor([digit]).to(DEVICE), NUM_CLASSES).float()
-        img   = model.generate(z, label)
-        save_image(img, f"{SAVE_DIR}/generated_{digit}.png")
-    print(f"  Saved digit {digit}")
+        img   = model.generate(z, label)          # 1×1×28×28
+        img   = F.interpolate(img, size=(size, size), mode='bilinear', align_corners=False)
+        show_image(img, label)
+        save_image(img, f"{SAVE_DIR}/generated_{digit}_{size}x{size}.png")
+
+# def generate_digit(model, digit):
+#     model.eval()
+#     with torch.no_grad():
+#         z     = torch.randn(1, LATENT_DIM).to(DEVICE)
+#         label = F.one_hot(torch.tensor([digit]).to(DEVICE), NUM_CLASSES).float()
+#         img   = model.generate(z, label)
+        
+#         save_image(img, f"{SAVE_DIR}/generated_{digit}.png")
+#     print(f"  Saved digit {digit}")
+
+
+def show_image(img_tensor, label):
+    img = img_tensor.detach().cpu().squeeze()
+    plt.imshow(img, cmap='gray')
+    plt.title(f"Generated Digit: {label.argmax().item()}")
+    plt.axis('off')
+    plt.show()
+
 
 
 # ─── MAIN ───────────────────────────────────────────────────────
@@ -193,38 +216,42 @@ def main():
 
     print(f"Device : {DEVICE}")
     print(f"Latent : {LATENT_DIM}  |  Batch: {BATCH_SIZE}  |  Epochs: {EPOCHS}")
+    print(f"Want to train the model: ")
+    TRAIN = input("  [y/n]: ").strip().lower() == "y"
     print(f"{'='*75}")
 
-    for epoch in range(start_epoch + 1, EPOCHS + 1):
+    if TRAIN:
+        for epoch in range(start_epoch + 1, EPOCHS + 1):
 
-        kl_weight = min(1.0, epoch / 10.0) if KL_ANNEAL else 1.0
+            kl_weight = min(1.0, epoch / 10.0) if KL_ANNEAL else 1.0
 
-        train_loss, train_acc = run_epoch(model, train_loader, optimizer, kl_weight, train=True)
-        test_loss,  test_acc  = run_epoch(model, test_loader,  optimizer, kl_weight, train=False)
+            train_loss, train_acc = run_epoch(model, train_loader, optimizer, kl_weight, train=True)
+            test_loss,  test_acc  = run_epoch(model, test_loader,  optimizer, kl_weight, train=False)
 
-        scheduler.step()
-        current_lr = scheduler.get_last_lr()[0]
+            scheduler.step()
+            current_lr = scheduler.get_last_lr()[0]
 
-        print(
-            f"Epoch [{epoch:>3}/{EPOCHS}] | "
-            f"Train: {train_loss:.4f} (Acc: {train_acc:.2f}%) | "
-            f"Test: {test_loss:.4f} (Acc: {test_acc:.2f}%) | "
-            f"KL_w: {kl_weight:.2f} | "
-            f"LR: {current_lr:.6f}"
-        )
+            print(
+                f"Epoch [{epoch:>3}/{EPOCHS}] | "
+                f"Train: {train_loss:.4f} (Acc: {train_acc:.2f}%) | "
+                f"Test: {test_loss:.4f} (Acc: {test_acc:.2f}%) | "
+                f"KL_w: {kl_weight:.2f} | "
+                f"LR: {current_lr:.6f}"
+            )
 
-        # ── save latest every N epochs ──────────────────────────
-        if epoch % SAVE_EVERY == 0:
-            save_checkpoint(epoch, model, optimizer, scheduler, best_loss, CKPT_FILE)
-            print(f"  [ckpt] Saved latest → {CKPT_FILE}")
+            # ── save latest every N epochs ──────────────────────────
+            if epoch % SAVE_EVERY == 0:
+                save_checkpoint(epoch, model, optimizer, scheduler, best_loss, CKPT_FILE)
+                print(f"  [ckpt] Saved latest → {CKPT_FILE}")
 
-        # ── save best model separately ──────────────────────────
-        if test_loss < best_loss:
-            best_loss = test_loss
-            save_checkpoint(epoch, model, optimizer, scheduler, best_loss, BEST_FILE)
-            print(f"  [best] New best test loss {best_loss:.4f} → {BEST_FILE}")
-
-    print(f"\n{'='*75}\nTraining complete. Generating digits...\n")
+            # ── save best model separately ──────────────────────────
+            if test_loss < best_loss:
+                best_loss = test_loss
+                save_checkpoint(epoch, model, optimizer, scheduler, best_loss, BEST_FILE)
+                print(f"  [best] New best test loss {best_loss:.4f} → {BEST_FILE}")
+        print(f"\n{'='*75}\nTraining complete.")
+    
+    print(f"Generating digits 0-9...")
     for digit in range(10):
         generate_digit(model, digit)
     print(f"\nImages saved in: {SAVE_DIR}")
