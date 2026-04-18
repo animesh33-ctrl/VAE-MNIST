@@ -6,8 +6,6 @@ from torchvision import datasets, transforms
 from torchvision.utils import save_image
 from tqdm import tqdm
 import os
-from torchvision.utils import make_grid
-
 
 # ─── CONFIG ─────────────────────────────────────────────────────
 DEVICE       = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -91,12 +89,12 @@ class CVAE(nn.Module):
 
 # ─── LOSS (weighted BCE — foreground 5x penalty) ────────────────
 def vae_loss(x_recon_logits, x, mu, log_var, kl_weight=1.0):
-    pos_weight = torch.full_like(x, POS_WEIGHT)
+    pos_weight = torch.full_like(x, POS_WEIGHT)   # penalise missed digits
     recon = F.binary_cross_entropy_with_logits(
-        x_recon_logits, x, pos_weight=pos_weight, reduction="mean"
+        x_recon_logits, x, pos_weight=pos_weight, reduction="sum"
     )
-    kl = -0.5 * torch.mean(1 + log_var - mu.pow(2) - log_var.exp())
-    return recon + kl_weight * 0.001 * kl
+    kl = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp())
+    return recon + kl_weight * kl
 
 
 # ─── ACCURACY (foreground pixels only) ──────────────────────────
@@ -142,7 +140,7 @@ def run_epoch(model, loader, optimizer, kl_weight, train=True):
 
     with ctx:
         bar = tqdm(loader, desc=f"  {tag}", leave=False,
-                   dynamic_ncols=True, colour="cyan" if train else "yellow")
+                   dynamic_ncols=True, colour="cyan" if train else "red")
         for x, y in bar:
             x    = x.to(DEVICE, non_blocking=True)
             y_oh = F.one_hot(y.to(DEVICE), NUM_CLASSES).float()
@@ -159,11 +157,11 @@ def run_epoch(model, loader, optimizer, kl_weight, train=True):
                 optimizer.step()
 
             bs          = x.size(0)
-            total_loss += loss.item() * bs
+            total_loss += loss.item()
             total_acc  += pixel_accuracy(x_recon_logits, x) * bs
             n          += bs
 
-            bar.set_postfix(loss=f"{loss.item():.6f}")
+            bar.set_postfix(loss=f"{loss.item()/bs:.4f}")
 
     return total_loss / n, total_acc / n
 
@@ -172,17 +170,11 @@ def run_epoch(model, loader, optimizer, kl_weight, train=True):
 def generate_digit(model, digit):
     model.eval()
     with torch.no_grad():
+        z     = torch.randn(1, LATENT_DIM).to(DEVICE)
         label = F.one_hot(torch.tensor([digit]).to(DEVICE), NUM_CLASSES).float()
-        imgs = []
-        for i in range(5):
-            z   = torch.randn(1, LATENT_DIM).to(DEVICE)
-            img = model.generate(z, label)
-            imgs.append(img)
-            save_image(img, f"{SAVE_DIR}/generated_{digit}_v{i}.png")
-        # save grid of all 5
-        grid = make_grid(torch.cat(imgs, dim=0), nrow=5)
-        save_image(grid, f"{SAVE_DIR}/generated_{digit}_grid.png")
-    print(f"  Saved digit {digit} (5 variants + grid)")
+        img   = model.generate(z, label)
+        save_image(img, f"{SAVE_DIR}/generated_{digit}.png")
+    print(f"  Saved digit {digit}")
 
 
 # ─── MAIN ───────────────────────────────────────────────────────
@@ -213,6 +205,7 @@ def main():
     print(f"Want to train the model: ")
     TRAIN = input("  [y/n]: ").strip().lower() == "y"
     print(f"{'='*75}")
+
     if TRAIN:
         for epoch in range(start_epoch + 1, start_epoch+EPOCHS + 1):
 
